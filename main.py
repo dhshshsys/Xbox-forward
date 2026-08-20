@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-TELEGRAM AUTO-FORWARDER v22.0 – RAILWAY GOD-TIER DEPLOYMENT
+TELEGRAM AUTO-FORWARDER v23.0 – RAILWAY GOD-TIER (FIXED)
 ✅ Filename: main.py (Railway auto-detects this!)
-✅ Single file deployment
+✅ Deployment time method fixed
 ✅ Auto-creates all needed files on first run
-✅ Works on Railway free plan
+✅ Runs forever on Railway free plan
 """
 
 import os
@@ -51,7 +51,6 @@ DEPLOYMENT_FILE = 'deployment_time.json'
 def create_railway_files():
     """Auto-create all required Railway files so Railpack detects Python"""
     try:
-        # Create requirements.txt (CRITICAL for Python detection)
         if not os.path.exists('requirements.txt'):
             with open('requirements.txt', 'w') as f:
                 f.write('''telethon>=1.34.0
@@ -60,7 +59,6 @@ cryptg>=0.4.0
 ''')
             print("✅ Created requirements.txt")
 
-        # Create start.sh (Railway looks for this)
         if not os.path.exists('start.sh'):
             with open('start.sh', 'w') as f:
                 f.write('''#!/bin/bash
@@ -70,7 +68,6 @@ python main.py
             os.chmod('start.sh', 0o755)
             print("✅ Created start.sh")
 
-        # Create nixpacks.toml (explicit Python config)
         if not os.path.exists('nixpacks.toml'):
             with open('nixpacks.toml', 'w') as f:
                 f.write('''[phases.setup]
@@ -84,7 +81,6 @@ cmd = "python main.py"
 ''')
             print("✅ Created nixpacks.toml")
 
-        # Create railway.json
         if not os.path.exists('railway.json'):
             with open('railway.json', 'w') as f:
                 f.write('''{
@@ -99,10 +95,9 @@ cmd = "python main.py"
 ''')
             print("✅ Created railway.json")
 
-        # Create Procfile (fallback)
         if not os.path.exists('Procfile'):
             with open('Procfile', 'w') as f:
-                f.write('web: python main.py\\n')
+                f.write('web: python main.py\n')
             print("✅ Created Procfile")
 
         return True
@@ -110,7 +105,6 @@ cmd = "python main.py"
         print(f"❌ Failed to create Railway files: {str(e)}")
         return False
 
-# Run this IMMEDIATELY so Railway detects Python
 create_railway_files()
 
 # ================================================================
@@ -142,7 +136,7 @@ def now_aware():
     return datetime.now(timezone.utc)
 
 # ================================================================
-# DEPLOYMENT MANAGER
+# DEPLOYMENT MANAGER (FIXED)
 # ================================================================
 
 class DeploymentManager:
@@ -398,7 +392,7 @@ class TelegramForwarder:
             logger.info(f"✅ Forwarded: {file_info['name']} ({file_info['size']/1024:.1f}KB)")
             if self.control_bot:
                 try:
-                    await self.client.send_message(self.control_bot, f"📤 {file_info['name']}\\n📁 {file_info['size']/1024:.1f}KB")
+                    await self.client.send_message(self.control_bot, f"📤 {file_info['name']}\n📁 {file_info['size']/1024:.1f}KB")
                 except:
                     pass
             await asyncio.sleep(random.uniform(2.0, 5.5))
@@ -413,7 +407,7 @@ class TelegramForwarder:
     
     async def run_loop(self):
         logger.info(f"🔄 Starting scan loop...")
-        logger.info(f"📅 ONLY files AFTER: {deployment.get_deployment_time().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        logger.info(f"📅 ONLY files AFTER: {deployment.deployment_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
         
         while self.is_running:
             try:
@@ -463,9 +457,10 @@ async def main():
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("🚀 TELEGRAM AUTO-FORWARDER v22.0 – RAILWAY GOD-TIER")
+    print("🚀 TELEGRAM AUTO-FORWARDER v23.0 – RAILWAY GOD-TIER")
     print("=" * 70)
-    print(f"✅ Deployment time: {deployment.get_deployment_time().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    # FIXED: Use deployment.deployment_time directly
+    print(f"✅ Deployment time: {deployment.deployment_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"✅ Health check on port {PORT}")
     print(f"✅ Auto-creates all Railway files")
     print("=" * 70)
