@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-TELEGRAM AUTO-FORWARDER v21.0 – RAILWAY DEPLOYMENT
+TELEGRAM AUTO-FORWARDER v22.0 – FINAL RAILWAY DEPLOYMENT
 """
 
 import os
@@ -20,7 +20,7 @@ from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 
 # ================================================================
-# ENVIRONMENT VARIABLES
+# ENVIRONMENT VARIABLES (Set these in Railway dashboard)
 # ================================================================
 
 SESSION_STRING = os.environ.get('SESSION_STRING', '1BVtsOLEBuzomCJpipJP4r4UoPd66tglye3cdnHy-O2Gf1jbZRyQSIA5p7cpUpj3D2NPubpNWmGvZ4OgfAFz9gbcw2uGyrkz5iRaH0i8735Vz8H-iFRmsBInTuCZ6mB-KHABExVfZzuzS2XDzxNJVUTbyAZByQQ1gLqKK_UKHC5ShKuB_i2S8ebfWRx4ix1nkjwnTgcP2aPzKLmO_CpdP95VyQWWj2IORoyzrRgj3MaN7fBt52uWKGWoL3DmxJvDnXiWO-wZOkuAgHYFMDzKPDgNYDb2Pbe1VQX-rJxDAoj4d7SMp9SwcxfdeUuFgTrVwgf0CqFe3hTdh71oD14q6rs6EXVXBbME=')
@@ -390,7 +390,7 @@ async def main():
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("🚀 TELEGRAM AUTO-FORWARDER v21.0 – RAILWAY DEPLOYMENT")
+    print("🚀 TELEGRAM AUTO-FORWARDER v22.0 – RAILWAY DEPLOYMENT")
     print("=" * 70)
     print(f"✅ Deployment time: {deployment.get_deployment_time().strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"✅ Health check on port {PORT}")
