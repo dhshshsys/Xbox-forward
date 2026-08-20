@@ -2,11 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-TELEGRAM AUTO-FORWARDER v23.0 – RAILWAY GOD-TIER (FIXED)
-✅ Filename: main.py (Railway auto-detects this!)
-✅ Deployment time method fixed
-✅ Auto-creates all needed files on first run
-✅ Runs forever on Railway free plan
+TELEGRAM AUTO-FORWARDER v24.0 – RAILWAY DEPLOYABLE (WORKING)
+✅ Based on your working v10.0 forwarder
+✅ Railway deployment ready
+✅ Scans channels every 5-10 seconds
+✅ Forwards .txt files under 50MB to Xbox Checker Bot
+✅ Human-like behavior with random delays
 """
 
 import os
@@ -38,18 +39,23 @@ CONTROL_BOT_USERNAME = os.environ.get('CONTROL_BOT_USERNAME', 'XboxControlBot')
 SCAN_INTERVAL_MIN = int(os.environ.get('SCAN_INTERVAL_MIN', 5))
 SCAN_INTERVAL_MAX = int(os.environ.get('SCAN_INTERVAL_MAX', 10))
 MAX_FILE_SIZE = int(os.environ.get('MAX_FILE_SIZE', 50 * 1024 * 1024))
-MAX_MESSAGES_PER_CHANNEL = int(os.environ.get('MAX_MESSAGES_PER_CHANNEL', 20))
+FORWARD_DELAY_MIN = float(os.environ.get('FORWARD_DELAY_MIN', 2.0))
+FORWARD_DELAY_MAX = float(os.environ.get('FORWARD_DELAY_MAX', 5.5))
+BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 5))
+BATCH_PAUSE_MIN = float(os.environ.get('BATCH_PAUSE_MIN', 8))
+BATCH_PAUSE_MAX = float(os.environ.get('BATCH_PAUSE_MAX', 15))
+DAYS_BACK = int(os.environ.get('DAYS_BACK', 1))
 PORT = int(os.environ.get('PORT', 8080))
 
 DB_FILE = 'forwarded_files.db'
 DEPLOYMENT_FILE = 'deployment_time.json'
 
 # ================================================================
-# AUTO-CREATE RAILWAY FILES ON FIRST RUN
+# AUTO-CREATE RAILWAY FILES
 # ================================================================
 
 def create_railway_files():
-    """Auto-create all required Railway files so Railpack detects Python"""
+    """Auto-create all required Railway files"""
     try:
         if not os.path.exists('requirements.txt'):
             with open('requirements.txt', 'w') as f:
@@ -58,35 +64,27 @@ aiohttp>=3.9.0
 cryptg>=0.4.0
 ''')
             print("✅ Created requirements.txt")
-
         if not os.path.exists('start.sh'):
             with open('start.sh', 'w') as f:
                 f.write('''#!/bin/bash
-echo "🚀 Starting Xbox Forwarder..."
 python main.py
 ''')
             os.chmod('start.sh', 0o755)
             print("✅ Created start.sh")
-
         if not os.path.exists('nixpacks.toml'):
             with open('nixpacks.toml', 'w') as f:
                 f.write('''[phases.setup]
 nixPkgs = ["python311"]
-
 [phases.install]
 cmds = ["pip install -r requirements.txt"]
-
 [phases.start]
 cmd = "python main.py"
 ''')
             print("✅ Created nixpacks.toml")
-
         if not os.path.exists('railway.json'):
             with open('railway.json', 'w') as f:
                 f.write('''{
-  "build": {
-    "builder": "NIXPACKS"
-  },
+  "build": {"builder": "NIXPACKS"},
   "deploy": {
     "startCommand": "python main.py",
     "healthcheckPath": "/health"
@@ -94,15 +92,13 @@ cmd = "python main.py"
 }
 ''')
             print("✅ Created railway.json")
-
         if not os.path.exists('Procfile'):
             with open('Procfile', 'w') as f:
                 f.write('web: python main.py\n')
             print("✅ Created Procfile")
-
         return True
     except Exception as e:
-        print(f"❌ Failed to create Railway files: {str(e)}")
+        print(f"❌ Failed to create files: {str(e)}")
         return False
 
 create_railway_files()
@@ -127,16 +123,11 @@ def make_aware(dt):
         return dt.replace(tzinfo=timezone.utc)
     return dt
 
-def make_naive(dt):
-    if dt.tzinfo is not None:
-        return dt.replace(tzinfo=None)
-    return dt
-
 def now_aware():
     return datetime.now(timezone.utc)
 
 # ================================================================
-# DEPLOYMENT MANAGER (FIXED)
+# DEPLOYMENT MANAGER
 # ================================================================
 
 class DeploymentManager:
@@ -156,16 +147,14 @@ class DeploymentManager:
                     return
             except:
                 pass
-        
         self.deployment_time = now_aware()
         self._save()
         logger.info(f"📅 New deployment time set: {self.deployment_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
     
     def _save(self):
         try:
-            naive_time = make_naive(self.deployment_time)
             with open(self.file_path, 'w') as f:
-                json.dump({'deployment_time': naive_time.isoformat()}, f, indent=2)
+                json.dump({'deployment_time': self.deployment_time.isoformat()}, f, indent=2)
         except:
             pass
     
@@ -178,7 +167,7 @@ class DeploymentManager:
 deployment = DeploymentManager()
 
 # ================================================================
-# DATABASE
+# DATABASE MANAGER (FROM YOUR WORKING V10.0)
 # ================================================================
 
 class DatabaseManager:
@@ -187,68 +176,67 @@ class DatabaseManager:
         self._init_db()
     
     def _init_db(self):
-        try:
-            conn = sqlite3.connect(self.db_file)
-            c = conn.cursor()
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS forwarded_files (
-                    file_hash TEXT PRIMARY KEY,
-                    channel_id INTEGER,
-                    message_id INTEGER,
-                    file_name TEXT,
-                    file_size INTEGER,
-                    forwarded_at TIMESTAMP,
-                    channel_name TEXT,
-                    message_date TIMESTAMP
-                )
-            ''')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_channel_msg ON forwarded_files(channel_id, message_id)')
-            conn.commit()
-            conn.close()
-            logger.info("✅ Database initialized")
-        except:
-            pass
+        conn = sqlite3.connect(self.db_file)
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS forwarded_files (
+                file_hash TEXT PRIMARY KEY,
+                channel_id INTEGER,
+                message_id INTEGER,
+                file_name TEXT,
+                file_size INTEGER,
+                forwarded_at TIMESTAMP,
+                channel_name TEXT
+            )
+        ''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_channel_id ON forwarded_files(channel_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_forwarded_at ON forwarded_files(forwarded_at)')
+        conn.commit()
+        conn.close()
+        logger.info("✅ Database initialized")
     
     def is_forwarded(self, file_hash):
-        try:
-            conn = sqlite3.connect(self.db_file)
-            c = conn.cursor()
-            c.execute('SELECT 1 FROM forwarded_files WHERE file_hash = ?', (file_hash,))
-            result = c.fetchone()
-            conn.close()
-            return result is not None
-        except:
-            return False
+        conn = sqlite3.connect(self.db_file)
+        c = conn.cursor()
+        c.execute('SELECT 1 FROM forwarded_files WHERE file_hash = ?', (file_hash,))
+        result = c.fetchone()
+        conn.close()
+        return result is not None
     
-    def mark_forwarded(self, file_hash, channel_id, message_id, file_name, file_size, channel_name, message_date):
-        try:
-            conn = sqlite3.connect(self.db_file)
-            c = conn.cursor()
-            naive_date = make_naive(message_date)
-            c.execute('''
-                INSERT OR REPLACE INTO forwarded_files 
-                (file_hash, channel_id, message_id, file_name, file_size, forwarded_at, channel_name, message_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (file_hash, channel_id, message_id, file_name, file_size, 
-                  make_naive(now_aware()).isoformat(), channel_name, naive_date.isoformat()))
-            conn.commit()
-            conn.close()
-            return True
-        except:
-            return False
+    def mark_forwarded(self, file_hash, channel_id, message_id, file_name, file_size, channel_name):
+        conn = sqlite3.connect(self.db_file)
+        c = conn.cursor()
+        c.execute('''
+            INSERT OR REPLACE INTO forwarded_files 
+            (file_hash, channel_id, message_id, file_name, file_size, forwarded_at, channel_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (file_hash, channel_id, message_id, file_name, file_size, 
+              datetime.now().isoformat(), channel_name))
+        conn.commit()
+        conn.close()
+    
+    def cleanup_old(self, days=30):
+        conn = sqlite3.connect(self.db_file)
+        c = conn.cursor()
+        cutoff = datetime.now() - timedelta(days=days)
+        c.execute('DELETE FROM forwarded_files WHERE forwarded_at < ?', (cutoff.isoformat(),))
+        conn.commit()
+        conn.close()
+        logger.info(f"🧹 Cleaned up records older than {days} days")
 
 db = DatabaseManager()
 
 # ================================================================
-# HUMAN MIMICRY
+# HUMAN MIMICRY ENGINE (FROM YOUR WORKING V10.0)
 # ================================================================
 
 class HumanMimic:
     @staticmethod
     async def simulate_typing(client, entity):
         try:
+            duration = random.uniform(1.5, 4.0)
             async with client.action(entity, 'typing'):
-                await asyncio.sleep(random.uniform(1.5, 4.0))
+                await asyncio.sleep(duration)
         except:
             pass
     
@@ -259,6 +247,14 @@ class HumanMimic:
             await asyncio.sleep(random.uniform(0.3, 1.0))
         except:
             pass
+    
+    @staticmethod
+    async def delay_between_forwards():
+        await asyncio.sleep(random.uniform(FORWARD_DELAY_MIN, FORWARD_DELAY_MAX))
+    
+    @staticmethod
+    async def batch_pause():
+        await asyncio.sleep(random.uniform(BATCH_PAUSE_MIN, BATCH_PAUSE_MAX))
 
 # ================================================================
 # HEALTH CHECK SERVER
@@ -280,102 +276,189 @@ async def start_health_server():
         return False
 
 # ================================================================
-# MAIN FORWARDER
+# MAIN FORWARDER CLASS (FROM YOUR WORKING V10.0)
 # ================================================================
 
 class TelegramForwarder:
     def __init__(self):
-        self.client = None
+        self.client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
         self.is_running = True
         self.forward_target = None
         self.control_bot = None
     
     async def resolve_bot(self, bot_token, bot_username=None):
+        """Resolve a bot entity using multiple methods"""
         bot_id = int(bot_token.split(':')[0])
+        
         if bot_username:
             try:
-                return await self.client.get_entity(f'@{bot_username}')
-            except:
-                pass
+                logger.info(f"   Trying to resolve by username: @{bot_username}")
+                entity = await self.client.get_entity(f'@{bot_username}')
+                logger.info(f"   ✅ Found by username: {entity.id}")
+                return entity
+            except Exception as e:
+                logger.warning(f"   ⚠️ Username resolution failed: {str(e)}")
+        
         try:
-            return await self.client.get_entity(bot_id)
-        except:
-            pass
+            logger.info(f"   Trying to find in dialogs...")
+            dialogs = await self.client.get_dialogs()
+            for dialog in dialogs:
+                if dialog.entity.id == bot_id:
+                    logger.info(f"   ✅ Found in dialogs: {dialog.entity.id}")
+                    return dialog.entity
+        except Exception as e:
+            logger.warning(f"   ⚠️ Dialog search failed: {str(e)}")
+        
         try:
+            logger.info(f"   Trying to resolve by ID: {bot_id}")
+            entity = await self.client.get_entity(bot_id)
+            logger.info(f"   ✅ Found by ID: {entity.id}")
+            return entity
+        except Exception as e:
+            logger.warning(f"   ⚠️ ID resolution failed: {str(e)}")
+        
+        try:
+            logger.info(f"   Trying to start conversation with bot...")
             await self.client.send_message(bot_id, '/start')
             await asyncio.sleep(1)
-            return await self.client.get_entity(bot_id)
-        except:
+            entity = await self.client.get_entity(bot_id)
+            logger.info(f"   ✅ Found after sending /start: {entity.id}")
+            return entity
+        except Exception as e:
+            logger.error(f"   ❌ All resolution methods failed: {str(e)}")
             return None
     
     async def authenticate(self):
+        """Authenticate and setup bots"""
         try:
-            self.client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+            logger.info("🔑 Authenticating with session string...")
             await self.client.start()
             
             me = await self.client.get_me()
             logger.info(f"✅ Logged in as: {me.first_name} (@{me.username or 'no username'})")
             logger.info(f"✅ User ID: {me.id}")
             
-            self.forward_target = await self.resolve_bot(FORWARD_BOT_TOKEN, FORWARD_BOT_USERNAME)
-            if not self.forward_target:
-                logger.error("❌ Xbox Checker Bot not found!")
-                return False
-            logger.info(f"✅ Xbox Checker Bot found: {self.forward_target.id}")
+            logger.info("🔍 Setting up Xbox Checker Bot (forward target)...")
+            logger.info("   Using multiple resolution methods...")
             
+            self.forward_target = await self.resolve_bot(FORWARD_BOT_TOKEN, FORWARD_BOT_USERNAME)
+            
+            if not self.forward_target:
+                logger.error("❌ Could not find Xbox Checker Bot!")
+                return False
+            
+            logger.info(f"✅ Xbox Checker Bot found: {self.forward_target.id}")
+            logger.info(f"✅ All .txt files will be forwarded to Xbox Checker Bot")
+            
+            logger.info("🔍 Setting up Xbox Control Panel Bot...")
             self.control_bot = await self.resolve_bot(CONTROL_BOT_TOKEN, CONTROL_BOT_USERNAME)
+            
             if self.control_bot:
-                logger.info(f"✅ Control bot found: {self.control_bot.id}")
+                logger.info(f"✅ Xbox Control Panel Bot found: {self.control_bot.id}")
+                try:
+                    await self.client.send_message(
+                        self.control_bot,
+                        f"✅ Auto-Forwarder Started!\n"
+                        f"👤 User: {me.first_name} (@{me.username or 'no username'})\n"
+                        f"🆔 ID: {me.id}\n"
+                        f"📤 Forwarding to: Xbox Checker Bot\n"
+                        f"📁 Max file size: 50MB\n"
+                        f"⏱️ Scan interval: 5-10 seconds"
+                    )
+                    logger.info("✅ Startup notification sent to Xbox Control Panel Bot")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not send startup notification: {str(e)}")
+            else:
+                logger.warning("⚠️ Xbox Control Panel Bot not available")
+                logger.info("💡 Continuing without control bot...")
             
             return True
+            
         except Exception as e:
-            logger.error(f"❌ Auth failed: {str(e)}")
+            logger.error(f"❌ Authentication failed: {str(e)}")
             return False
     
     async def get_channels(self):
+        """Get all channels"""
         try:
             dialogs = await self.client.get_dialogs()
-            return [{'id': d.id, 'name': d.name, 'entity': d.entity} for d in dialogs if d.is_channel]
+            channels = []
+            for dialog in dialogs:
+                if dialog.is_channel:
+                    channels.append({
+                        'id': dialog.id,
+                        'name': dialog.name,
+                        'title': dialog.title,
+                        'entity': dialog.entity
+                    })
+            logger.info(f"📡 Found {len(channels)} channels")
+            return channels
         except Exception as e:
             logger.error(f"❌ Error getting channels: {str(e)}")
             return []
     
     def extract_file_info(self, message):
+        """Extract file info"""
         if not message.document:
             return None
+        
         file_name = None
         for attr in message.document.attributes:
             if isinstance(attr, DocumentAttributeFilename):
                 file_name = attr.file_name
                 break
+        
         if not file_name or not file_name.lower().endswith('.txt'):
             return None
-        if message.document.size > MAX_FILE_SIZE:
+        
+        file_size = message.document.size
+        if file_size > MAX_FILE_SIZE:
+            logger.info(f"⏭️ Skipping {file_name} – {file_size/1024/1024:.2f}MB > 50MB")
             return None
+        
+        hash_input = f"{message.id}_{file_name}_{file_size}"
+        file_hash = hashlib.sha256(hash_input.encode()).hexdigest()
+        
         return {
-            'hash': hashlib.sha256(f"{message.id}_{file_name}_{message.document.size}".encode()).hexdigest(),
+            'hash': file_hash,
             'name': file_name,
-            'size': message.document.size,
+            'size': file_size,
             'message_id': message.id,
             'message_obj': message,
             'date': message.date
         }
     
     async def scan_channel(self, channel):
+        """Scan a channel – ONLY files AFTER deployment time"""
         try:
-            messages = await self.client.get_messages(channel['entity'], limit=MAX_MESSAGES_PER_CHANNEL)
+            since_time = datetime.now() - timedelta(days=DAYS_BACK)
+            messages = await self.client.get_messages(
+                channel['entity'],
+                limit=100,
+                offset_date=since_time
+            )
+            
             new_files = []
             for msg in messages:
+                # Skip files before deployment time
                 if not deployment.is_after_deployment(msg.date):
                     continue
+                    
                 file_info = self.extract_file_info(msg)
                 if file_info and not db.is_forwarded(file_info['hash']):
-                    new_files.append({**file_info, 'channel_id': channel['id'], 'channel_name': channel['name']})
+                    new_files.append({
+                        **file_info,
+                        'channel_id': channel['id'],
+                        'channel_name': channel['name']
+                    })
+            
             if new_files:
-                logger.info(f"📄 Found {len(new_files)} NEW files in {channel['name']}")
+                logger.info(f"📄 Found {len(new_files)} new .txt files in {channel['name']}")
+            
             return new_files
+            
         except FloodWaitError as e:
-            logger.warning(f"⏳ Flood wait {e.seconds}s")
+            logger.warning(f"⏳ Flood wait {e.seconds}s for {channel['name']}")
             await asyncio.sleep(e.seconds)
             return []
         except Exception as e:
@@ -383,20 +466,43 @@ class TelegramForwarder:
             return []
     
     async def forward_file(self, file_info):
+        """Forward a file to Xbox Checker Bot"""
         try:
             await HumanMimic.simulate_reading(self.client, file_info['message_obj'].peer_id)
             await HumanMimic.simulate_typing(self.client, self.forward_target)
-            await self.client.forward_messages(self.forward_target, messages=file_info['message_obj'], drop_author=True)
-            db.mark_forwarded(file_info['hash'], file_info['channel_id'], file_info['message_id'],
-                             file_info['name'], file_info['size'], file_info['channel_name'], file_info['date'])
-            logger.info(f"✅ Forwarded: {file_info['name']} ({file_info['size']/1024:.1f}KB)")
+            
+            await self.client.forward_messages(
+                self.forward_target,
+                messages=file_info['message_obj'],
+                drop_author=True
+            )
+            
+            db.mark_forwarded(
+                file_hash=file_info['hash'],
+                channel_id=file_info['channel_id'],
+                message_id=file_info['message_id'],
+                file_name=file_info['name'],
+                file_size=file_info['size'],
+                channel_name=file_info['channel_name']
+            )
+            
+            logger.info(f"✅ Forwarded: {file_info['name']} ({file_info['size']/1024:.1f}KB) → Xbox Checker Bot")
+            
             if self.control_bot:
                 try:
-                    await self.client.send_message(self.control_bot, f"📤 {file_info['name']}\n📁 {file_info['size']/1024:.1f}KB")
+                    await self.client.send_message(
+                        self.control_bot,
+                        f"📤 Forwarded: {file_info['name']}\n"
+                        f"📁 Size: {file_info['size']/1024:.1f}KB\n"
+                        f"📂 From: {file_info['channel_name']}\n"
+                        f"🕐 Time: {datetime.now().strftime('%H:%M:%S')}"
+                    )
                 except:
                     pass
-            await asyncio.sleep(random.uniform(2.0, 5.5))
+            
+            await HumanMimic.delay_between_forwards()
             return True
+            
         except FloodWaitError as e:
             logger.warning(f"⏳ Flood wait {e.seconds}s")
             await asyncio.sleep(e.seconds)
@@ -405,8 +511,26 @@ class TelegramForwarder:
             logger.error(f"❌ Failed to forward {file_info['name']}: {str(e)}")
             return False
     
+    async def process_files(self, files):
+        """Process a batch"""
+        if not files:
+            return
+        
+        random.shuffle(files)
+        logger.info(f"📦 Processing {len(files)} files")
+        
+        for i, file_info in enumerate(files):
+            if i > 0 and i % BATCH_SIZE == 0:
+                logger.info(f"⏸️ Batch pause – {i} files processed")
+                await HumanMimic.batch_pause()
+            
+            await self.forward_file(file_info)
+    
     async def run_loop(self):
-        logger.info(f"🔄 Starting scan loop...")
+        """Main loop"""
+        logger.info("🔄 Starting scan loop...")
+        logger.info(f"📊 Scan interval: {SCAN_INTERVAL_MIN}-{SCAN_INTERVAL_MAX}s")
+        logger.info(f"📤 Forward target: Xbox Checker Bot")
         logger.info(f"📅 ONLY files AFTER: {deployment.deployment_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
         
         while self.is_running:
@@ -424,44 +548,73 @@ class TelegramForwarder:
                         all_files.extend(files)
                 
                 if all_files:
-                    logger.info(f"📦 Total {len(all_files)} NEW files")
-                    random.shuffle(all_files)
-                    for file_info in all_files:
-                        await self.forward_file(file_info)
+                    logger.info(f"📦 Total {len(all_files)} new files to forward")
+                    await self.process_files(all_files)
                 else:
-                    logger.info("📭 No new files")
+                    logger.info("📭 No new .txt files found")
                 
-                await asyncio.sleep(random.uniform(SCAN_INTERVAL_MIN, SCAN_INTERVAL_MAX))
+                wait_time = random.uniform(SCAN_INTERVAL_MIN, SCAN_INTERVAL_MAX)
+                logger.info(f"⏳ Next scan in {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+                
+            except KeyboardInterrupt:
+                break
             except Exception as e:
                 logger.error(f"❌ Loop error: {str(e)}")
                 await asyncio.sleep(10)
     
     async def start(self):
+        """Start"""
         if not await self.authenticate():
+            logger.error("❌ Failed to authenticate")
             return
+        
+        logger.info("🚀 Starting Xbox Auto-Forwarder...")
         await self.run_loop()
+    
+    async def stop(self):
+        """Stop"""
+        self.is_running = False
+        await self.client.disconnect()
+        logger.info("✅ Disconnected")
 
 # ================================================================
 # MAIN
 # ================================================================
 
 async def main():
+    # Start health check
     await start_health_server()
+    
+    # Start forwarder
     forwarder = TelegramForwarder()
     try:
         await forwarder.start()
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Stopping...")
+        await forwarder.stop()
     except Exception as e:
-        logger.error(f"❌ Fatal: {str(e)}")
+        logger.error(f"❌ Fatal error: {str(e)}")
+        await forwarder.stop()
         await asyncio.sleep(30)
         os._exit(1)
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("🚀 TELEGRAM AUTO-FORWARDER v23.0 – RAILWAY GOD-TIER")
+    print("🚀 TELEGRAM AUTO-FORWARDER v24.0 – RAILWAY DEPLOYABLE")
     print("=" * 70)
-    # FIXED: Use deployment.deployment_time directly
     print(f"✅ Deployment time: {deployment.deployment_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print(f"✅ Forward target: Xbox Checker Bot")
+    print(f"✅ Control bot: Xbox Control Panel Bot")
     print(f"✅ Health check on port {PORT}")
-    print(f"✅ Auto-creates all Railway files")
     print("=" * 70)
+    print("\n📋 How it works:")
+    print("   • Scans all your channels every 5-10 seconds")
+    print("   • Finds .txt files under 50MB")
+    print("   • Forwards them to Xbox Checker Bot")
+    print("   • Human-like behavior with random delays")
+    print("   • Database tracks forwarded files (no duplicates)")
+    print("   • ONLY files AFTER deployment time are forwarded")
+    print("\n🎮 Xbox Mode Activated!\n")
+    
     asyncio.run(main())
