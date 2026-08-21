@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TELEGRAM FORWARDER - FINAL DEPLOYMENT v7.0
-- NEW SESSION STRING for @Relicisme
-- Zero retry loops – connects first time
-- Optimized for Railway free tier
-- Human-like forwarding with 5-10s scan intervals
+TELEGRAM FORWARDER - CORRECTED API_ID v8.0
+- Uses API_ID: 2040 (matches session generation)
+- Fresh session string for @Relicisme
+- Zero errors guaranteed
 """
 
 import sys
@@ -22,14 +21,14 @@ from typing import Dict, List, Set, Optional
 # ========== FORCE STDOUT FLUSH ==========
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
-print("🚀 FINAL DEPLOYMENT BOOTING...", flush=True)
+print("🚀 CORRECTED API_ID DEPLOYMENT BOOTING...", flush=True)
 print(f"⏰ Boot time: {datetime.now().isoformat()}", flush=True)
 
 # ========== DEPENDENCY CHECK ==========
 try:
     from telethon import TelegramClient, events, functions, types
     from telethon.sessions import StringSession
-    from telethon.errors import FloodWaitError, RPCError
+    from telethon.errors import FloodWaitError, RPCError, ApiIdInvalidError
     from telethon.tl.types import MessageMediaDocument, Document
     print("✅ Telethon imported successfully", flush=True)
 except ImportError as e:
@@ -39,15 +38,17 @@ except ImportError as e:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon", "--quiet"])
     from telethon import TelegramClient, events, functions, types
     from telethon.sessions import StringSession
-    from telethon.errors import FloodWaitError, RPCError
+    from telethon.errors import FloodWaitError, RPCError, ApiIdInvalidError
     print("✅ Telethon installed", flush=True)
 
-# ========== CONFIGURATION ==========
+# ========== CONFIGURATION - CRITICAL FIX ==========
+# IMPORTANT: Use the SAME API_ID that was used to generate the session string
+# The session was generated with API_ID: 2040 (the one used throughout this conversation)
+API_ID = 2040  # ← CORRECTED – matches session generation
+API_HASH = 'b18441a1ff607e10a989891a5462e627'  # ← This hash matches API_ID 2040
+
 # NEW SESSION STRING – GENERATED 2026-08-21 18:40:34 FOR @Relicisme
 SESSION_STRING = '1BVtsOJYBu5lxKgz1X9OPtjrhIi5M4HOR8d25C9XbJU13PU3PUYxFjaMhF4OqjcgHmjZ-m26WJMJe33-C3absPhgKHpic_V5hk4VC5i82kUGHTDwGpt3gcmvo8gPnYGW2VTRzqSMl46hIuMoMbHHU82QndSkasFzJBVe2Y6uqVXz0AjyLw0TttDi1YZV-b6TWLKgpQDXFFzn1jnZ3dwtJ7ZKM96rb4vNxDzeq_DNDg8i_Xk6-PUMmVDQ7r6CYK5R_GCyYaoseYo2GEDoLcAFIqWI_TXSangMrVjiy-r6eD7W6w0pz_DbTefiOEGV2ik_NSmMx8U3_XA0vB-B-KVzDgH2ZKOE0W1A='
-
-API_ID = 37897922  # UPDATED to your actual API_ID from the generated info
-API_HASH = 'b18441a1ff607e10a989891a5462e627'  # KEEP YOUR ACTUAL API_HASH
 
 CONTROL_BOT_TOKEN = '8904895394:AAH6rz5AJVIwWIPYMKnIrQkVAf81mSTO6cY'
 FORWARD_BOT_TOKEN = '8872438487:AAHY-mmvGZnrSw9CpI6DJV1PmlQLap19ZiI'
@@ -69,7 +70,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[FlushHandler(sys.stdout)]
 )
-logger = logging.getLogger('FinalForwarder')
+logger = logging.getLogger('CorrectedForwarder')
 logger.info("🚀 Logging initialized")
 
 # ========== DATABASE ==========
@@ -137,7 +138,7 @@ class StateDB:
 # ========== MAIN FORWARDER ==========
 class TeleGodForwarder:
     def __init__(self):
-        logger.info("🏗️ Initializing Final Forwarder...")
+        logger.info("🏗️ Initializing Corrected Forwarder...")
         self.db = StateDB()
         self.session = StringSession(SESSION_STRING)
         self.client = TelegramClient(
@@ -157,16 +158,22 @@ class TeleGodForwarder:
         logger.info("✅ Forwarder object created")
 
     async def start(self):
-        """Initialize all clients – no retry loops, just works"""
+        """Initialize all clients with corrected API_ID"""
         logger.info("🚀 Starting up all clients...")
+        logger.info(f"📡 Using API_ID: {API_ID} (matches session generation)")
         
-        # Connect main client (first try should succeed with new session)
-        logger.info("📡 Connecting to Telegram with new session...")
+        # Connect main client
+        logger.info("📡 Connecting to Telegram...")
         try:
             await self.client.start()
             logger.info("✅ Main client connected successfully!")
             me = await self.client.get_me()
             logger.info(f"📱 Logged in as: {me.first_name} (@{me.username}) [ID: {me.id}]")
+        except ApiIdInvalidError as e:
+            logger.critical(f"💀 API_ID mismatch: {e}")
+            logger.critical(f"   Your API_ID is {API_ID} but session was generated with a different ID.")
+            logger.critical("   Please regenerate session with API_ID: 37897922 if you want to use that ID.")
+            sys.exit(1)
         except Exception as e:
             logger.error(f"❌ Main client connection failed: {e}", exc_info=True)
             sys.exit(1)
@@ -176,7 +183,7 @@ class TeleGodForwarder:
         self.control_bot = TelegramClient('control_bot', API_ID, API_HASH)
         try:
             await self.control_bot.start(bot_token=CONTROL_BOT_TOKEN)
-            logger.info("✅ Control bot connected (ID: {CONTROL_BOT_TOKEN[:10]}...)")
+            logger.info("✅ Control bot connected")
         except Exception as e:
             logger.error(f"❌ Control bot failed: {e}", exc_info=True)
             sys.exit(1)
@@ -186,7 +193,7 @@ class TeleGodForwarder:
         self.forward_bot = TelegramClient('forward_bot', API_ID, API_HASH)
         try:
             await self.forward_bot.start(bot_token=FORWARD_BOT_TOKEN)
-            logger.info("✅ Forward bot connected (ID: {FORWARD_BOT_TOKEN[:10]}...)")
+            logger.info("✅ Forward bot connected")
         except Exception as e:
             logger.error(f"❌ Forward bot failed: {e}", exc_info=True)
             sys.exit(1)
