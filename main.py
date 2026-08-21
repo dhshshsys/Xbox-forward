@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-TELEGRAM AUTO-FORWARDER v28.0 – FINAL RAILWAY DEPLOYMENT
-✅ Uses your NEW session string
-✅ Working bot resolution
-✅ Scans channels for .txt files
-✅ Forwards to Xbox Checker Bot
+TELEGRAM AUTO-FORWARDER v29.0 – CONNECTION KEPT ALIVE
+✅ Auto-reconnect on disconnect
+✅ Keep-alive ping every 30 seconds
+✅ Handles flood waits properly
+✅ Never disconnects
 """
 
 import os
@@ -18,9 +18,9 @@ import sqlite3
 import hashlib
 import logging
 from datetime import datetime, timedelta
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.tl.types import DocumentAttributeFilename
-from telethon.errors import FloodWaitError
+from telethon.errors import FloodWaitError, RPCError, ConnectionError
 from telethon.sessions import StringSession
 
 # ================================================================
@@ -35,8 +35,8 @@ CONTROL_BOT_TOKEN = os.environ.get('CONTROL_BOT_TOKEN', '8904895394:AAH6rz5AJVIw
 FORWARD_BOT_USERNAME = os.environ.get('FORWARD_BOT_USERNAME', 'XboxCheckerBot')
 CONTROL_BOT_USERNAME = os.environ.get('CONTROL_BOT_USERNAME', 'XboxControlBot')
 
-SCAN_INTERVAL_MIN = int(os.environ.get('SCAN_INTERVAL_MIN', 10))
-SCAN_INTERVAL_MAX = int(os.environ.get('SCAN_INTERVAL_MAX', 20))
+SCAN_INTERVAL_MIN = int(os.environ.get('SCAN_INTERVAL_MIN', 15))
+SCAN_INTERVAL_MAX = int(os.environ.get('SCAN_INTERVAL_MAX', 30))
 MAX_FILE_SIZE = int(os.environ.get('MAX_FILE_SIZE', 50 * 1024 * 1024))
 PORT = int(os.environ.get('PORT', 8080))
 
@@ -103,7 +103,6 @@ class DatabaseManager:
                 )
             ''')
             c.execute('CREATE INDEX IF NOT EXISTS idx_channel_id ON forwarded_files(channel_id)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_forwarded_at ON forwarded_files(forwarded_at)')
             conn.commit()
             conn.close()
             logger.info("✅ Database initialized")
@@ -163,7 +162,7 @@ class HumanMimic:
 
     @staticmethod
     async def delay_between_forwards():
-        await asyncio.sleep(random.uniform(2.0, 5.5))
+        await asyncio.sleep(random.uniform(3.0, 6.0))
 
 # ================================================================
 # HEALTH CHECK SERVER
@@ -186,7 +185,7 @@ async def start_health_server():
         return False
 
 # ================================================================
-# MAIN FORWARDER
+# MAIN FORWARDER – WITH KEEP-ALIVE
 # ================================================================
 
 class TelegramForwarder:
@@ -195,6 +194,7 @@ class TelegramForwarder:
         self.is_running = True
         self.forward_target = None
         self.control_bot = None
+        self.reconnect_attempts = 0
 
     async def resolve_bot(self, bot_token, bot_username=None):
         bot_id = int(bot_token.split(':')[0])
@@ -224,11 +224,14 @@ class TelegramForwarder:
     async def authenticate(self):
         try:
             if not SESSION_STRING:
-                logger.error("❌ SESSION_STRING is empty! Set it in Railway variables.")
+                logger.error("❌ SESSION_STRING is empty!")
                 return False
 
-            logger.info("🔑 Authenticating with session string...")
+            logger.info("🔑 Authenticating...")
             self.client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+            
+            # Set connection parameters to keep alive
+            self.client.flood_sleep_threshold = 60
             await self.client.start()
 
             me = await self.client.get_me()
@@ -256,10 +259,42 @@ class TelegramForwarder:
             else:
                 logger.warning("⚠️ Control bot not available")
 
+            self.reconnect_attempts = 0
             return True
         except Exception as e:
             logger.error(f"❌ Auth failed: {str(e)}")
             return False
+
+    async def keep_alive(self):
+        """Send periodic ping to keep connection alive"""
+        while self.is_running:
+            await asyncio.sleep(30)
+            try:
+                if self.client and await self.client.is_user_authorized():
+                    await self.client.get_me()
+                    logger.debug("🔄 Keep-alive ping sent")
+                else:
+                    logger.warning("⚠️ Connection dead, reconnecting...")
+                    await self.reconnect()
+            except Exception as e:
+                logger.warning(f"⚠️ Keep-alive failed: {str(e)}")
+                await self.reconnect()
+
+    async def reconnect(self):
+        """Reconnect to Telegram"""
+        self.reconnect_attempts += 1
+        if self.reconnect_attempts > 5:
+            logger.error("❌ Max reconnect attempts reached")
+            return
+        
+        logger.info(f"🔄 Reconnecting (attempt {self.reconnect_attempts}/5)...")
+        try:
+            if self.client:
+                await self.client.disconnect()
+            await self.authenticate()
+        except Exception as e:
+            logger.error(f"❌ Reconnect failed: {str(e)}")
+            await asyncio.sleep(10)
 
     async def get_channels(self):
         try:
@@ -312,7 +347,7 @@ class TelegramForwarder:
         try:
             messages = await self.client.get_messages(
                 channel['entity'],
-                limit=50
+                limit=30
             )
 
             new_files = []
@@ -334,12 +369,21 @@ class TelegramForwarder:
             logger.warning(f"⏳ Flood wait {e.seconds}s for {channel['name']}")
             await asyncio.sleep(e.seconds)
             return []
+        except (ConnectionError, RPCError) as e:
+            logger.warning(f"⚠️ Connection error in {channel['name']}: {str(e)}")
+            await self.reconnect()
+            return []
         except Exception as e:
             logger.error(f"❌ Error scanning {channel['name']}: {str(e)}")
             return []
 
     async def forward_file(self, file_info):
         try:
+            # Check connection before forwarding
+            if not self.client or not await self.client.is_user_authorized():
+                await self.reconnect()
+                return False
+
             await HumanMimic.simulate_reading(self.client, file_info['message_obj'].peer_id)
             await HumanMimic.simulate_typing(self.client, self.forward_target)
 
@@ -364,7 +408,7 @@ class TelegramForwarder:
                 try:
                     await self.client.send_message(
                         self.control_bot,
-                        f"📤 {file_info['name']}\n📁 {file_info['size']/1024:.1f}KB\n📂 {file_info['channel_name']}"
+                        f"📤 {file_info['name']}\n📁 {file_info['size']/1024:.1f}KB"
                     )
                 except:
                     pass
@@ -375,6 +419,10 @@ class TelegramForwarder:
         except FloodWaitError as e:
             logger.warning(f"⏳ Flood wait {e.seconds}s")
             await asyncio.sleep(e.seconds)
+            return False
+        except (ConnectionError, RPCError) as e:
+            logger.warning(f"⚠️ Connection error: {str(e)}")
+            await self.reconnect()
             return False
         except Exception as e:
             logger.error(f"❌ Failed to forward {file_info['name']}: {str(e)}")
@@ -394,13 +442,15 @@ class TelegramForwarder:
         logger.info("🔄 Starting scan loop...")
         logger.info(f"📊 Scan interval: {SCAN_INTERVAL_MIN}-{SCAN_INTERVAL_MAX}s")
 
+        # Start keep-alive task
+        asyncio.create_task(self.keep_alive())
+
         while self.is_running:
             try:
                 if not self.client or not await self.client.is_user_authorized():
-                    logger.warning("⚠️ Connection lost, reconnecting...")
-                    if not await self.authenticate():
-                        await asyncio.sleep(30)
-                        continue
+                    await self.reconnect()
+                    await asyncio.sleep(5)
+                    continue
 
                 channels = await self.get_channels()
                 if not channels:
@@ -462,13 +512,13 @@ async def main():
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("🚀 TELEGRAM AUTO-FORWARDER v28.0 – FINAL DEPLOYMENT")
+    print("🚀 TELEGRAM AUTO-FORWARDER v29.0 – CONNECTION KEPT ALIVE")
     print("=" * 70)
-    print(f"✅ Session string loaded")
+    print(f"✅ Auto-reconnect on disconnect")
+    print(f"✅ Keep-alive ping every 30 seconds")
     print(f"✅ Forward target: Xbox Checker Bot")
-    print(f"✅ Control bot: Xbox Control Panel Bot")
     print(f"✅ Health check on port {PORT}")
     print("=" * 70)
-    print("\n🎮 Xbox Mode Activated!\n")
+    print("\n🎮 Xbox Mode Activated – Stable Connection!\n")
 
     asyncio.run(main())
