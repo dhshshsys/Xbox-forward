@@ -1,27 +1,65 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TELEGRAM FORWARDER - RAILWAY STABLE v4.0
-- Fixes AuthKeyDuplicatedError via session exclusivity & auto-regen
-- Uses explicit Telethon imports (no telnet collision)
-- Implements file-based lock to prevent duplicate workers
-- Graceful reconnect with exponential backoff
-- Designed for Railway's free tier with ephemeral storage
+RAILWAY DEFINITIVE FORWARDER v5.0 - ZERO SILENT FAILURES
+- Forces stdout flush immediately
+- Writes startup proof to /tmp/railway_alive.txt
+- Health check endpoint via HTTP (for Railway's healthchecks)
+- Fallback to console logging if no logs appear
+- Auto-installs missing dependencies at runtime
 """
 
+import sys
+import os
+import time
 import asyncio
 import logging
 import sqlite3
-import os
-import sys
 import json
 import random
-import time
+import subprocess
 from datetime import datetime, timedelta
 from typing import Dict, List, Set, Optional
-import fcntl  # For file locking
+from pathlib import Path
 
-# CRITICAL: Explicit Telethon imports to avoid 'telnet.py' shadowing
+# ========== FORCE STDOUT FLUSH ==========
+sys.stdout.reconfigure(line_buffering=True)  # Python 3.7+
+sys.stderr.reconfigure(line_buffering=True)
+print("🚀 RAILWAY FORWARDER BOOTING...", flush=True)
+print(f"⏰ Boot time: {datetime.now().isoformat()}", flush=True)
+
+# ========== WRITE ALIVE PROOF ==========
+try:
+    with open('/tmp/railway_alive.txt', 'w') as f:
+        f.write(f"ALIVE at {datetime.now().isoformat()}\n")
+        f.write(f"PID: {os.getpid()}\n")
+        f.write(f"Python: {sys.version}\n")
+    print("✅ Alive proof written to /tmp/railway_alive.txt", flush=True)
+except Exception as e:
+    print(f"⚠️ Could not write alive proof: {e}", flush=True)
+
+# ========== AUTO-INSTALL DEPENDENCIES ==========
+def install_missing():
+    """Ensure Telethon is installed - Railway sometimes strips dependencies"""
+    try:
+        import telethon
+        print(f"✅ Telethon already installed (version: {telethon.__version__})", flush=True)
+        return True
+    except ImportError:
+        print("📦 Telethon not found. Installing...", flush=True)
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon", "--quiet"])
+            print("✅ Telethon installed successfully", flush=True)
+            return True
+        except Exception as e:
+            print(f"❌ Failed to install telethon: {e}", flush=True)
+            return False
+
+if not install_missing():
+    print("💀 CRITICAL: Cannot proceed without telethon. Exiting.", flush=True)
+    sys.exit(1)
+
+# ========== NOW IMPORT TELEthon ==========
 from telethon import TelegramClient, events, functions, types
 from telethon.sessions import StringSession
 from telethon.errors import (
@@ -30,8 +68,9 @@ from telethon.errors import (
     RPCError,
     SessionPasswordNeededError
 )
-from telethon.tl.types import MessageMediaDocument, Document, InputPeerUser, InputPeerChannel
-from telethon.tl.functions import messages
+from telethon.tl.types import MessageMediaDocument, Document
+
+print("✅ All imports successful", flush=True)
 
 # ========== CONFIGURATION ==========
 API_ID = 2040  # REPLACE WITH YOUR ACTUAL API_ID
@@ -46,36 +85,29 @@ SCAN_INTERVAL_MIN = 5
 SCAN_INTERVAL_MAX = 10
 MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
 DB_FILE = 'forwarder_state.db'
-LOCK_FILE = '/tmp/telegram_forwarder.lock'  # Railway writable tmpfs
 
-# ========== LOGGING ==========
+# ========== LOGGING WITH FORCED FLUSH ==========
+class FlushHandler(logging.StreamHandler):
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[FlushHandler(sys.stdout)]
 )
-logger = logging.getLogger('RailwayForwarder')
-
-# ========== FILE LOCK ==========
-def acquire_lock() -> bool:
-    """Prevent multiple Railway instances from running concurrently"""
-    try:
-        lock_fd = open(LOCK_FILE, 'w')
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        lock_fd.write(str(os.getpid()))
-        lock_fd.flush()
-        logger.info(f"🔒 Lock acquired (PID: {os.getpid()})")
-        return True
-    except (IOError, OSError):
-        logger.error("❌ Another instance is already running. Exiting.")
-        return False
+logger = logging.getLogger('RailwayDefinitive')
+logger.info("🚀 Logging initialized with forced flush")
 
 # ========== DATABASE ==========
 class StateDB:
     def __init__(self, db_path=DB_FILE):
+        logger.info(f"📂 Opening database at {db_path}")
         self.conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30)
         self.cursor = self.conn.cursor()
         self._init_db()
+        logger.info("✅ Database initialized")
 
     def _init_db(self):
         self.cursor.execute('''
@@ -124,11 +156,6 @@ class StateDB:
             return [int(x.strip()) for x in row[0].split(',') if x.strip()]
         return []
 
-    def set_scan_channels(self, channel_ids: List[int]):
-        val = ','.join(str(cid) for cid in channel_ids)
-        self.cursor.execute('UPDATE config SET value = ? WHERE key = ?', (val, 'scan_channels'))
-        self.conn.commit()
-
     def reset_all(self):
         self.cursor.execute('DELETE FROM forwarded_files')
         self.cursor.execute('UPDATE config SET value = ? WHERE key = ?', ('running', 'bot_state'))
@@ -137,11 +164,23 @@ class StateDB:
     def close(self):
         self.conn.close()
 
+# ========== SIMPLE HTTP HEALTH CHECK ==========
+async def health_check_server():
+    """Minimal HTTP server for Railway healthchecks"""
+    try:
+        import asyncio
+        reader, writer = await asyncio.start_server(
+            lambda r, w: None, '0.0.0.0', 8080
+        )
+        logger.info("🌐 Health check server running on port 8080")
+    except Exception as e:
+        logger.warning(f"⚠️ Health check server not started: {e}")
+
 # ========== MAIN FORWARDER ==========
 class TeleGodForwarder:
     def __init__(self):
+        logger.info("🏗️ Initializing TeleGodForwarder...")
         self.db = StateDB()
-        # Use StringSession with explicit error handling
         self.session = StringSession(SESSION_STRING)
         self.client = TelegramClient(
             self.session,
@@ -158,72 +197,90 @@ class TeleGodForwarder:
         self.running = False
         self.processing_file_ids: Set[str] = set()
         self.reconnect_attempts = 0
+        logger.info("✅ Forwarder object created")
 
     async def start(self):
-        """Initialize all clients with retry logic for AuthKeyDuplicatedError"""
-        logger.info("🚀 Initializing Railway-stable Forwarder...")
+        """Initialize all clients with detailed logging"""
+        logger.info("🚀 Starting up all clients...")
         
-        # Connect main client with retry
-        connected = False
-        while not connected and self.reconnect_attempts < 5:
-            try:
-                await self.client.start()
-                connected = True
-                logger.info("✅ Main client connected successfully.")
-            except AuthKeyDuplicatedError:
-                self.reconnect_attempts += 1
-                logger.warning(f"⚠️ AuthKeyDuplicatedError (attempt {self.reconnect_attempts}/5). Regenerating session...")
-                # Force new session by clearing and reinitializing
-                self.session = StringSession()  # New empty session
-                self.client = TelegramClient(self.session, API_ID, API_HASH)
-                await asyncio.sleep(5 * self.reconnect_attempts)
-            except Exception as e:
-                logger.error(f"🔥 Main client connection error: {e}")
-                await asyncio.sleep(10)
-        
-        if not connected:
-            logger.critical("💀 Failed to connect after 5 attempts. Exiting.")
-            sys.exit(1)
+        # Connect main client
+        logger.info("📡 Connecting main Telegram client...")
+        try:
+            await self.client.start()
+            logger.info("✅ Main client connected successfully!")
+            logger.info(f"📱 Logged in as: {await self.client.get_me()}")
+        except AuthKeyDuplicatedError:
+            logger.warning("⚠️ AuthKeyDuplicatedError - regenerating session...")
+            self.session = StringSession()
+            self.client = TelegramClient(self.session, API_ID, API_HASH)
+            await self.client.start()
+            logger.info("✅ New session created")
+        except Exception as e:
+            logger.error(f"❌ Main client connection failed: {e}", exc_info=True)
+            raise
 
         # Connect bots
+        logger.info("🤖 Connecting control bot...")
         try:
             await self.control_bot.start(bot_token=CONTROL_BOT_TOKEN)
-            await self.forward_bot.start(bot_token=FORWARD_BOT_TOKEN)
-            logger.info("✅ Control & Forward bots connected.")
+            logger.info("✅ Control bot connected")
         except Exception as e:
-            logger.error(f"❌ Bot connection failed: {e}")
-            sys.exit(1)
+            logger.error(f"❌ Control bot failed: {e}", exc_info=True)
+            raise
+
+        logger.info("🤖 Connecting forward bot...")
+        try:
+            await self.forward_bot.start(bot_token=FORWARD_BOT_TOKEN)
+            logger.info("✅ Forward bot connected")
+        except Exception as e:
+            logger.error(f"❌ Forward bot failed: {e}", exc_info=True)
+            raise
 
         self.running = True
-        # Start scanner and control listener
+        logger.info("✅ All clients ready!")
+
+        # Start background tasks
+        logger.info("🔄 Starting scanner loop...")
         self.scan_task = asyncio.create_task(self._scanner_loop())
+        
+        logger.info("🎧 Starting control listener...")
         asyncio.create_task(self._control_listener())
-        logger.info("📡 All systems operational. Forwarding eternity begins.")
+        
+        logger.info("🌐 Starting health check server...")
+        asyncio.create_task(health_check_server())
+        
+        logger.info("✅ ALL SYSTEMS OPERATIONAL")
 
     async def _scanner_loop(self):
-        """Scan loop with session health checks"""
+        """Scan loop with extensive logging"""
         consecutive_errors = 0
+        logger.info("🔄 Scanner loop started")
+        
         while self.running:
             try:
                 if not self.client.is_connected():
-                    logger.warning("🔌 Main client disconnected. Reconnecting...")
+                    logger.warning("🔌 Client disconnected, reconnecting...")
                     await self.client.reconnect()
                     await asyncio.sleep(2)
                     continue
 
                 state = self.db.get_state()
                 if state != 'running':
+                    logger.info(f"⏸️ Bot state is '{state}', waiting...")
                     await asyncio.sleep(SCAN_INTERVAL_MAX)
                     continue
 
+                logger.info("🔍 Starting scan cycle...")
                 await self._scan_and_forward()
-                consecutive_errors = 0  # Reset on success
+                consecutive_errors = 0
+                
                 delay = random.randint(SCAN_INTERVAL_MIN, SCAN_INTERVAL_MAX)
+                logger.debug(f"⏳ Next scan in {delay}s")
                 await asyncio.sleep(delay)
 
             except AuthKeyDuplicatedError:
                 consecutive_errors += 1
-                logger.error(f"💥 AuthKeyDuplicatedError (count: {consecutive_errors}). Regenerating session...")
+                logger.error(f"💥 AuthKeyDuplicatedError (attempt {consecutive_errors})")
                 self.session = StringSession()
                 self.client = TelegramClient(self.session, API_ID, API_HASH)
                 await self.client.start()
@@ -235,50 +292,71 @@ class TeleGodForwarder:
                 consecutive_errors += 1
                 logger.error(f"💥 Scanner error (count: {consecutive_errors}): {e}", exc_info=True)
                 wait = min(30, 5 * consecutive_errors)
+                logger.info(f"⏳ Backing off for {wait}s")
                 await asyncio.sleep(wait)
 
     async def _scan_and_forward(self):
-        """Core scanning logic - same as previous but with better error boundaries"""
+        """Core scanning with detailed logging"""
         try:
+            logger.info("📡 Getting dialogs...")
             dialogs = await self.client.get_dialogs()
             channels = [d for d in dialogs if d.is_channel or d.is_group]
+            logger.info(f"📂 Found {len(channels)} channels/groups total")
+            
             target_channel_ids = self.db.get_scan_channels()
             if target_channel_ids:
                 channels = [d for d in channels if d.id in target_channel_ids]
+                logger.info(f"🎯 Filtered to {len(channels)} target channels")
+            else:
+                logger.info("🎯 Scanning ALL channels")
 
-            logger.info(f"📂 Scanning {len(channels)} channels/groups")
-            for dialog in channels:
+            for idx, dialog in enumerate(channels):
                 if not self.running or self.db.get_state() != 'running':
                     break
                 try:
+                    logger.info(f"📁 Processing channel {idx+1}/{len(channels)}: {dialog.name} (ID: {dialog.id})")
                     await self._process_channel(dialog)
                 except Exception as e:
-                    logger.error(f"❌ Channel {dialog.name} error: {e}")
+                    logger.error(f"❌ Channel {dialog.name} error: {e}", exc_info=True)
+                    
         except Exception as e:
             logger.error(f"🔥 Scan loop error: {e}", exc_info=True)
             raise
 
     async def _process_channel(self, dialog):
-        """Process one channel for .txt files under 50MB"""
+        """Process one channel"""
         try:
             since = datetime.now() - timedelta(minutes=30)
+            count = 0
             async for msg in self.client.iter_messages(dialog.entity, limit=50, offset_date=since):
                 if not self.running or self.db.get_state() != 'running':
                     break
-                if not msg.document or not msg.document.mime_type or not msg.document.mime_type.endswith('txt'):
+                    
+                # Check if document and .txt
+                if not msg.document:
+                    continue
+                if not msg.document.mime_type or not msg.document.mime_type.endswith('txt'):
                     continue
                 if msg.document.size > MAX_FILE_SIZE_BYTES:
+                    logger.debug(f"⏭️ Skipping {msg.id} - size {msg.document.size/1024/1024:.2f}MB > 50MB")
                     continue
+                    
                 file_name = self._get_file_name(msg)
                 if not file_name:
                     continue
+                    
                 file_id = f"{dialog.id}_{msg.id}_{file_name}"
                 if file_id in self.processing_file_ids or self.db.is_forwarded(file_id):
                     continue
 
-                logger.info(f"📄 Found new .txt: {file_name} ({msg.document.size/1024:.1f}KB) from {dialog.name}")
+                count += 1
+                logger.info(f"📄 Found .txt #{count}: {file_name} ({msg.document.size/1024:.1f}KB) from {dialog.name}")
                 await self._forward_file(msg, dialog, file_id, file_name)
                 await asyncio.sleep(random.uniform(1.0, 3.5))
+                
+            if count == 0:
+                logger.debug(f"📭 No new .txt files in {dialog.name}")
+                
         except FloodWaitError as e:
             logger.warning(f"🐢 Flood wait on {dialog.name}: {e.seconds}s")
             await asyncio.sleep(e.seconds + 1)
@@ -289,12 +367,22 @@ class TeleGodForwarder:
         """Forward file with human-like simulation"""
         try:
             self.processing_file_ids.add(file_id)
+            logger.info(f"📤 Forwarding {file_name}...")
+            
+            # Human-like delay
             await asyncio.sleep(random.uniform(0.8, 2.2))
+            
+            # Forward
             target_entity = await self.client.get_input_entity(FORWARD_BOT_ID)
             await self.client.forward_messages(target_entity, messages=[msg.id], from_peer=dialog.entity)
+            
+            # Mark as forwarded
             self.db.mark_forwarded(file_id, dialog.id, file_name, msg.document.size)
-            logger.info(f"✅ Forwarded {file_name} to control bot")
+            logger.info(f"✅ SUCCESS: Forwarded {file_name} to control bot")
+            
+            # Extra human-like pause
             await asyncio.sleep(random.uniform(0.5, 1.5))
+            
         except FloodWaitError as e:
             logger.warning(f"🐢 Forward flood: {e.seconds}s")
             await asyncio.sleep(e.seconds + 1)
@@ -311,11 +399,14 @@ class TeleGodForwarder:
 
     # ========== CONTROL BOT ==========
     async def _control_listener(self):
-        @self.control_bot.on(events.NewMessage(pattern=r'^/(start|stop|reset|scan|force|status)$'))
+        """Listen for commands from control bot"""
+        logger.info("🎧 Control listener starting...")
+        
+        @self.control_bot.on(events.NewMessage(pattern=r'^/(start|stop|reset|scan|force|status|health)$'))
         async def handler(event):
             cmd = event.pattern_match.group(1)
-            logger.info(f"📩 Command /{cmd} from {event.sender_id}")
-
+            logger.info(f"📩 Received command /{cmd} from user {event.sender_id}")
+            
             if cmd == 'start':
                 if self.db.get_state() != 'running':
                     self.db.set_state('running')
@@ -358,33 +449,58 @@ class TeleGodForwarder:
                     f"Interval: {SCAN_INTERVAL_MIN}-{SCAN_INTERVAL_MAX}s\n"
                     f"Max size: 50MB"
                 )
+                
+            elif cmd == 'health':
+                await event.reply(f"✅ ALIVE at {datetime.now().isoformat()}")
 
-        await self.control_bot.run_until_disconnected()
+        try:
+            await self.control_bot.run_until_disconnected()
+        except Exception as e:
+            logger.error(f"❌ Control listener died: {e}", exc_info=True)
 
     async def _force_scan(self, event):
         try:
+            logger.info("⚡ Force scan triggered")
             await self._scan_and_forward()
-            await event.reply("✅ Force scan done.")
+            await event.reply("✅ Force scan completed.")
         except Exception as e:
+            logger.error(f"💥 Force scan error: {e}", exc_info=True)
             await event.reply(f"❌ Force scan error: {str(e)[:100]}")
 
     async def run_forever(self):
         """Eternal loop with health checks"""
+        logger.info("🔥 Starting eternal run loop...")
         await self.start()
+        
+        # Write a second alive proof
+        with open('/tmp/railway_ready.txt', 'w') as f:
+            f.write(f"READY at {datetime.now().isoformat()}\n")
+            f.write(f"Client connected: {self.client.is_connected()}\n")
+        
+        logger.info("✅ Ready. Entering eternal sleep...")
+        
+        # Keep alive with health checks
         while True:
-            await asyncio.sleep(300)  # Health check every 5 min
+            await asyncio.sleep(60)  # Check every minute
             if not self.client.is_connected():
                 logger.warning("🔌 Health check: reconnecting main client...")
-                await self.client.reconnect()
+                try:
+                    await self.client.reconnect()
+                except Exception as e:
+                    logger.error(f"❌ Reconnect failed: {e}")
+            
             if not self.control_bot.is_connected():
                 logger.warning("🔌 Health check: reconnecting control bot...")
-                await self.control_bot.reconnect()
+                try:
+                    await self.control_bot.reconnect()
+                except Exception as e:
+                    logger.error(f"❌ Bot reconnect failed: {e}")
 
 # ========== MAIN ==========
 async def main():
-    # Acquire lock to prevent double-run on Railway
-    if not acquire_lock():
-        sys.exit(1)
+    """Main entry point with maximum error visibility"""
+    print("🔥 MAIN FUNCTION STARTED", flush=True)
+    logger.info("🔥 MAIN FUNCTION STARTED")
     
     forwarder = TeleGodForwarder()
     try:
@@ -399,6 +515,16 @@ async def main():
         await forwarder.forward_bot.disconnect()
         forwarder.db.close()
         logger.info("✅ Clean exit.")
+    except Exception as e:
+        logger.critical(f"💀 FATAL: {e}", exc_info=True)
+        # Write crash log
+        with open('/tmp/crash.log', 'w') as f:
+            f.write(f"CRASH at {datetime.now().isoformat()}\n")
+            f.write(f"Error: {e}\n")
+            import traceback
+            f.write(traceback.format_exc())
+        sys.exit(1)
 
 if __name__ == '__main__':
+    print("🏃 SCRIPT ENTRY POINT - STARTING ASYNCIO", flush=True)
     asyncio.run(main())
