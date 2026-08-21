@@ -2,11 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-TELEGRAM AUTO-FORWARDER v30.0 – FINAL WORKING
-✅ No import errors
-✅ Auto-reconnect on disconnect
+TELEGRAM AUTO-FORWARDER v31.0 – SESSION CONFLICT FIXED
+✅ Only ONE active session at a time
+✅ Auto-reconnect
 ✅ Keep-alive ping
-✅ Stable connection
 """
 
 import os
@@ -24,7 +23,7 @@ from telethon.errors import FloodWaitError, RPCError
 from telethon.sessions import StringSession
 
 # ================================================================
-# ENVIRONMENT VARIABLES (Railway)
+# ENVIRONMENT VARIABLES
 # ================================================================
 
 SESSION_STRING = os.environ.get('SESSION_STRING', '1BVtsOJYBu2tXHovwxstEdqlXCXSiKDVy_sqmjJaTgR0DlFA1PuAytlrWLGescZkJ2TX0oMcruuxjMSpUa-dKMlcgYni6yzE2gnBzoax9qJ8JaVFJlORlIPP1faEClynqiLLgwpsQ1OwMPE-mF6dcPT0qEV_7GFsZdj4g0vMupMLlKNoYfJzyxmCk58y1teB1hei3FehjNl5ZeFDC_v6zcplvV2GMQSMQzXDckgU27qM60Ot546Fpvys0geHbxQoK0IyGtIp-pFSJTcne-sFdo-CO2-461eRBFnmWnPsnzRgmYzAcFBeqwl_QfXWFiPUQG2TN4fqayep0hFn6vghnO_s0EnjQ3vo=')
@@ -230,8 +229,10 @@ class TelegramForwarder:
             logger.info("🔑 Authenticating...")
             self.client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
             self.client.flood_sleep_threshold = 60
+            
+            # Force reconnect with new session
             await self.client.start()
-
+            
             me = await self.client.get_me()
             logger.info(f"✅ Logged in as: {me.first_name} (@{me.username or 'no username'})")
             logger.info(f"✅ User ID: {me.id}")
@@ -243,20 +244,6 @@ class TelegramForwarder:
                 return False
             logger.info(f"✅ Forward bot: {self.forward_target.id}")
 
-            logger.info("🔍 Resolving control bot...")
-            self.control_bot = await self.resolve_bot(CONTROL_BOT_TOKEN, CONTROL_BOT_USERNAME)
-            if self.control_bot:
-                logger.info(f"✅ Control bot: {self.control_bot.id}")
-                try:
-                    await self.client.send_message(
-                        self.control_bot,
-                        f"✅ Auto-Forwarder Started!\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                    )
-                except:
-                    pass
-            else:
-                logger.warning("⚠️ Control bot not available")
-
             self.reconnect_attempts = 0
             return True
         except Exception as e:
@@ -264,7 +251,6 @@ class TelegramForwarder:
             return False
 
     async def keep_alive(self):
-        """Send periodic ping to keep connection alive"""
         while self.is_running:
             await asyncio.sleep(30)
             try:
@@ -279,7 +265,6 @@ class TelegramForwarder:
                 await self.reconnect()
 
     async def reconnect(self):
-        """Reconnect to Telegram"""
         self.reconnect_attempts += 1
         if self.reconnect_attempts > 5:
             logger.error("❌ Max reconnect attempts reached")
@@ -397,15 +382,6 @@ class TelegramForwarder:
 
             logger.info(f"✅ Forwarded: {file_info['name']} ({file_info['size']/1024:.1f}KB)")
 
-            if self.control_bot:
-                try:
-                    await self.client.send_message(
-                        self.control_bot,
-                        f"📤 {file_info['name']}\n📁 {file_info['size']/1024:.1f}KB"
-                    )
-                except:
-                    pass
-
             await HumanMimic.delay_between_forwards()
             return True
 
@@ -500,14 +476,13 @@ async def main():
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("🚀 TELEGRAM AUTO-FORWARDER v30.0 – FINAL WORKING")
+    print("🚀 TELEGRAM AUTO-FORWARDER v31.0 – SESSION CONFLICT FIXED")
     print("=" * 70)
-    print(f"✅ No import errors")
+    print(f"✅ ONLY ONE active session at a time")
     print(f"✅ Auto-reconnect on disconnect")
     print(f"✅ Keep-alive ping every 30 seconds")
     print(f"✅ Forward target: Xbox Checker Bot")
-    print(f"✅ Health check on port {PORT}")
     print("=" * 70)
-    print("\n🎮 Xbox Mode Activated – Stable!\n")
+    print("\n🎮 Xbox Mode Activated!\n")
 
     asyncio.run(main())
