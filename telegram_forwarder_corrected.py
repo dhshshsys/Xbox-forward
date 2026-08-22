@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-TELEGRAM FORWARDER - SIMPLEST WORKING VERSION
-NO complexity, NO fancy features, JUST WORKS
+TELEGRAM FORWARDER - FINAL DEPLOYMENT
+With FRESH session - NO CONFLICTS
 """
 
 import sys
 import os
 import asyncio
-import logging
 import sqlite3
 import random
 from datetime import datetime, timedelta
@@ -16,9 +15,9 @@ from datetime import datetime, timedelta
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
-print("🚀 SIMPLEST VERSION BOOTING...", flush=True)
+print("🚀 FINAL DEPLOYMENT WITH FRESH SESSION...", flush=True)
 
-# INSTALL TELEthon
+# ========== INSTALL TELEthon ==========
 try:
     from telethon import TelegramClient, events
     from telethon.sessions import StringSession
@@ -39,41 +38,45 @@ except ImportError:
 API_ID = 2040
 API_HASH = 'b18441a1ff607e10a989891a5462e627'
 
-SESSION_STRING = '1BVtsOJYBu5lxKgz1X9OPtjrhIi5M4HOR8d25C9XbJU13PU3PUYxFjaMhF4OqjcgHmjZ-m26WJMJe33-C3absPhgKHpic_V5hk4VC5i82kUGHTDwGpt3gcmvo8gPnYGW2VTRzqSMl46hIuMoMbHHU82QndSkasFzJBVe2Y6uqVXz0AjyLw0TttDi1YZV-b6TWLKgpQDXFFzn1jnZ3dwtJ7ZKM96rb4vNxDzeq_DNDg8i_Xk6-PUMmVDQ7r6CYK5R_GCyYaoseYo2GEDoLcAFIqWI_TXSangMrVjiy-r6eD7W6w0pz_DbTefiOEGV2ik_NSmMx8U3_XA0vB-B-KVzDgH2ZKOE0W1A='
+# ========== NEW SESSION STRING (FRESH) ==========
+SESSION_STRING = '1BVtsOJYBu5e3_w2tzyQKDivSrxpr_tl4EdFbl4aYy2Y6JNdha62NHJrXi4K5VjSR3wEte_bKK67XIuAIckXGN4z3KtFPlXcr3cX0-AHSYyCixqz7P7uNw2Tmil4keLyVSkgDHFr7rQDxuGol9K2AYUyMDjRvCAaWIZTJQ_1t4Jlcn1pJGDfcS2fcpNTpGrsURCPHGSIs61RsO8JvFb2u3xty_-qoqtSkBnTq6Dc0bWM60FzT4Vg1UsdfgoLEqjaENqqRaDk0QB07v6yEPNA49BB1UP6Bm1hxcy4cgItxcY8UwYsUH1th3tDlvCpe_s9DFi63MePXc7BSKlMmzxvs-6KtMYQS5Ak='
 
 CONTROL_BOT_TOKEN = '8904895394:AAH6rz5AJVIwWIPYMKnIrQkVAf81mSTO6cY'
 CHECKER_BOT_ID = 8872438487
 
-# ========== SIMPLE DATABASE ==========
-class DB:
-    def __init__(self):
-        self.conn = sqlite3.connect('forwarded.db')
-        self.cursor = self.conn.cursor()
-        self.cursor.execute('CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY)')
-        self.conn.commit()
-    
-    def exists(self, file_id):
-        self.cursor.execute('SELECT 1 FROM files WHERE id = ?', (file_id,))
-        return self.cursor.fetchone() is not None
-    
-    def add(self, file_id):
-        self.cursor.execute('INSERT INTO files (id) VALUES (?)', (file_id,))
-        self.conn.commit()
+# ========== DATABASE ==========
+conn = sqlite3.connect('forwarded.db')
+c = conn.cursor()
+c.execute('CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, time TEXT)')
+conn.commit()
 
-db = DB()
+def is_forwarded(file_id):
+    c.execute('SELECT 1 FROM files WHERE id = ?', (file_id,))
+    return c.fetchone() is not None
+
+def mark_forwarded(file_id):
+    c.execute('INSERT INTO files (id, time) VALUES (?, ?)', (file_id, datetime.now().isoformat()))
+    conn.commit()
 
 # ========== MAIN ==========
 async def main():
-    print("📡 Connecting to Telegram...", flush=True)
+    print("\n📡 Connecting with FRESH session...", flush=True)
     
-    # Create user client
+    # Create client with NEW session
     user = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-    await user.start(phone=lambda: '')
     
+    try:
+        await user.start()
+        print("✅ Connected successfully!", flush=True)
+    except Exception as e:
+        print(f"❌ Connection failed: {e}", flush=True)
+        return
+    
+    # Get user info
     me = await user.get_me()
-    print(f"✅ Logged in as: {me.first_name} (@{me.username})", flush=True)
+    print(f"✅ Logged in as: {me.first_name} (@{me.username}) [ID: {me.id}]", flush=True)
     
-    # Create control bot
+    # Connect control bot
     print("🤖 Connecting control bot...", flush=True)
     control = TelegramClient('control', API_ID, API_HASH)
     await control.start(bot_token=CONTROL_BOT_TOKEN)
@@ -81,30 +84,29 @@ async def main():
     print(f"✅ Control bot connected: @{bot_me.username}", flush=True)
     
     # ========== COMMAND HANDLER ==========
-    @control.on(events.NewMessage(pattern='/status'))
-    async def status_handler(event):
-        print(f"📩 /status command received", flush=True)
-        await event.reply(f"✅ Bot is alive!\nTime: {datetime.now()}\nForwarded: {db.cursor.execute('SELECT COUNT(*) FROM files').fetchone()[0]} files")
-    
-    @control.on(events.NewMessage(pattern='/scan'))
-    async def scan_handler(event):
-        print(f"📩 /scan command received", flush=True)
-        await event.reply("🔍 Scanning...")
-        await scan_and_forward(user)
-        await event.reply("✅ Scan complete")
-    
-    @control.on(events.NewMessage(pattern='/start'))
-    async def start_handler(event):
-        print(f"📩 /start command received", flush=True)
-        await event.reply("✅ Bot started")
-    
-    @control.on(events.NewMessage(pattern='/help'))
-    async def help_handler(event):
-        await event.reply("Commands: /status, /scan, /start, /help")
+    @control.on(events.NewMessage)
+    async def handle_commands(event):
+        text = event.raw_text
+        print(f"📩 Command: {text}", flush=True)
+        
+        if text == '/status':
+            count = c.execute('SELECT COUNT(*) FROM files').fetchone()[0]
+            await event.reply(f"✅ ALIVE\nTime: {datetime.now()}\nForwarded: {count} files")
+        
+        elif text == '/scan':
+            await event.reply("🔍 Scanning...")
+            await scan_and_forward(user)
+            await event.reply("✅ Scan complete")
+        
+        elif text == '/start':
+            await event.reply("✅ Bot running")
+        
+        elif text == '/help':
+            await event.reply("Commands: /status, /scan, /start, /help")
     
     # ========== SCAN FUNCTION ==========
     async def scan_and_forward(user_client):
-        print("🔍 Scanning channels...", flush=True)
+        print("🔍 Scanning...", flush=True)
         try:
             dialogs = await user_client.get_dialogs()
             channels = [d for d in dialogs if d.is_channel or d.is_group]
@@ -112,7 +114,6 @@ async def main():
             
             for dialog in channels:
                 try:
-                    print(f"📂 Checking: {dialog.name}", flush=True)
                     since = datetime.now() - timedelta(minutes=30)
                     count = 0
                     
@@ -127,7 +128,6 @@ async def main():
                         if msg.document.size > 50 * 1024 * 1024:
                             continue
                         
-                        # Get filename
                         file_name = None
                         for attr in msg.document.attributes:
                             if isinstance(attr, DocumentAttributeFilename):
@@ -138,18 +138,17 @@ async def main():
                         
                         file_id = f"{dialog.id}_{msg.id}_{file_name}"
                         
-                        if db.exists(file_id):
+                        if is_forwarded(file_id):
                             continue
                         
                         count += 1
                         print(f"📄 Found: {file_name} ({msg.document.size/1024:.1f}KB) from {dialog.name}", flush=True)
                         
-                        # Forward to checker bot
                         try:
                             target = await user_client.get_input_entity(CHECKER_BOT_ID)
                             await user_client.forward_messages(target, messages=[msg.id], from_peer=dialog.entity)
-                            db.add(file_id)
-                            print(f"✅ Forwarded: {file_name} to CHECKER BOT", flush=True)
+                            mark_forwarded(file_id)
+                            print(f"✅ Forwarded to CHECKER BOT: {file_name}", flush=True)
                         except Exception as e:
                             print(f"❌ Forward failed: {e}", flush=True)
                         
@@ -180,16 +179,15 @@ async def main():
                 print(f"💥 Scanner error: {e}", flush=True)
                 await asyncio.sleep(10)
     
-    # ========== START EVERYTHING ==========
+    # ========== START ==========
+    print("\n" + "=" * 50, flush=True)
     print("✅ ALL SYSTEMS READY", flush=True)
-    print("📤 Files will be forwarded to CHECKER BOT: 8872438487", flush=True)
-    print("🎯 Commands go to CONTROL BOT", flush=True)
-    print("🔥 Starting eternal loop...", flush=True)
+    print(f"📤 Files → CHECKER BOT: {CHECKER_BOT_ID}", flush=True)
+    print(f"🎯 Commands → CONTROL BOT", flush=True)
+    print("=" * 50, flush=True)
     
-    # Start scanner in background
     asyncio.create_task(scanner_loop())
     
-    # Keep control bot running
     print("🎧 Listening for commands...", flush=True)
     await control.run_until_disconnected()
 
